@@ -1,7 +1,11 @@
-Flask>=2.3.2
-Flask-Cors>=3.0.10
-mediapipe>=0.10.0  # Let pip choose compatible version
-opencv-python>=4.8.0.76
-numpy>=1.24.3
-python-dotenv>=1.0.0
-gunicorn>=20.1.0
+Flask==2.3.2
+Flask-Cors==3.0.10
+opencv-python==4.8.0.76
+numpy==1.24.3
+python-dotenv==1.0.0
+gunicorn==20.1.0
+
+# Try one of these:
+mediapipe==0.10.8  # Latest stable (works on Linux x86_64)
+# OR (if on Apple Silicon/Mac M1/M2):
+# mediapipe-silicon==0.10.3
