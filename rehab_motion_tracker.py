@@ -23,15 +23,21 @@ tracker = None
 tracker_thread = None
 tracker_lock = threading.Lock()
 current_frame = None
+frame_lock = threading.Lock()  # Separate lock for frame access
 running = False
-
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Accept')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
-    response.headers.add('Cache-Control', 'no-store, no-cache, must-revalidate')
-    return response
+latest_status = {
+    "exercise": "Arm Raise",
+    "rep_count": 0,
+    "current_angle": 0.0,
+    "max_rom": 0.0,
+    "historical_max_rom": 0.0,
+    "rep_goal": 10,
+    "pain_level": 0,
+    "is_recording": False,
+    "is_camera_on": True,
+    "rep_speed": "Normal",
+    "feedback": ""
+}
 
 # Configure logging
 logging.basicConfig(
@@ -51,7 +57,7 @@ class RehabMotionTracker:
             self.mp_drawing = mp.solutions.drawing_utils
             self.mp_pose = mp.solutions.pose
             self.pose = self.mp_pose.Pose(
-                model_complexity=2,
+                model_complexity=1,  # Reduced complexity for faster processing
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5
             )
@@ -163,12 +169,14 @@ class RehabMotionTracker:
             else:
                 self.feedback_label.configure(text="", text_color="#ffd700")
             logger.debug(f"Pain level updated to: {self.pain_level}")
+            self.update_status()
         except Exception as e:
             logger.error(f"Error updating pain level: {str(e)}\n{traceback.format_exc()}")
 
     def toggle_camera(self):
         self.status_label.configure(text="Camera state updated by client.")
         logger.debug("Camera toggle processed (Flutter-managed)")
+        self.update_status()
 
     def toggle_recording(self):
         try:
@@ -187,6 +195,7 @@ class RehabMotionTracker:
                 self.status_label.configure(text="Recording stopped. Data saved.")
                 self.save_exercise_data()
             logger.info(f"Recording {'started' if self.is_recording else 'stopped'}")
+            self.update_status()
         except Exception as e:
             logger.error(f"Error toggling recording: {str(e)}\n{traceback.format_exc()}")
 
@@ -209,6 +218,7 @@ class RehabMotionTracker:
             self.feedback_label.configure(text="")
             self.status_label.configure(text=f"Counter reset. Ready for {self.current_exercise}.")
             logger.info("Counter reset")
+            self.update_status()
         except Exception as e:
             logger.error(f"Error resetting counter: {str(e)}\n{traceback.format_exc()}")
 
@@ -266,6 +276,7 @@ class RehabMotionTracker:
             elif exercise_name in ["Hip Extension"]:
                 self.angle_threshold = 20
             logger.info(f"Exercise changed to: {exercise_name}, threshold: {self.angle_threshold}")
+            self.update_status()
         except Exception as e:
             logger.error(f"Error changing exercise: {str(e)}\n{traceback.format_exc()}")
 
@@ -353,6 +364,7 @@ class RehabMotionTracker:
                 elif self.current_rep_speed == "Slow":
                     self.feedback_label.configure(text="Try to increase speed slightly.", text_color="#ff8800")
             logger.debug(f"Rep speed updated: {self.current_rep_speed}")
+            self.update_status()
         except Exception as e:
             logger.error(f"Error tracking rep speed: {str(e)}\n{traceback.format_exc()}")
 
@@ -377,6 +389,7 @@ class RehabMotionTracker:
             if feedback:
                 self.feedback_label.configure(text=feedback, text_color="#ff8800")
                 logger.debug(f"Form feedback: {feedback}")
+                self.update_status()
         except Exception as e:
             logger.error(f"Error checking exercise form: {str(e)}\n{traceback.format_exc()}")
 
@@ -397,6 +410,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(shoulder.x * frame.shape[1]), int(shoulder.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking arm raise: {str(e)}\n{traceback.format_exc()}")
@@ -418,6 +432,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(shoulder.x * frame.shape[1]), int(shoulder.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking arm raise left: {str(e)}\n{traceback.format_exc()}")
@@ -440,6 +455,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(knee.x * frame.shape[1]), int(knee.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking knee bend: {str(e)}\n{traceback.format_exc()}")
@@ -461,6 +477,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(knee.x * frame.shape[1]), int(knee.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking knee bend left: {str(e)}\n{traceback.format_exc()}")
@@ -483,6 +500,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(elbow.x * frame.shape[1]), int(elbow.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking shoulder rotation: {str(e)}\n{traceback.format_exc()}")
@@ -505,6 +523,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(elbow.x * frame.shape[1]), int(elbow.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking shoulder rotation left: {str(e)}\n{traceback.format_exc()}")
@@ -526,6 +545,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(elbow.x * frame.shape[1]), int(elbow.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking elbow flexion: {str(e)}\n{traceback.format_exc()}")
@@ -545,17 +565,8 @@ class RehabMotionTracker:
             elif angle > 150 and self.last_position == "up":
                 self.last_position = "down"
             cv2.putText(frame, f"{angle:.1f}°",
-                        (int(elbow.x * frame.shape[1]), int(elbow.y * frame.shape[0])),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-            return angle
-        except Exception as e:
-            logger.error(f"Error tracking elbow flexion left: {str(e)}\n{traceback.format_exc()}")
-            return None
-
-    def track_hip_abduction(self, landmarks, frame):
-        try:
+                        ( stagelandmarkmark[self.mp_pose.PoseLandmark.RIGHT_HIP]
             hip_left = landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP]
-            hip_right = landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP]
             knee = landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_KNEE]
             hip_mid_x = (hip_left.x + hip_right.x) / 2
             hip_mid_y = (hip_left.y + hip_right.y) / 2
@@ -578,6 +589,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{display_angle:.1f}°",
                         (int(hip_right.x * frame.shape[1]), int(hip_right.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(display_angle)
             return display_angle
         except Exception as e:
             logger.error(f"Error tracking hip abduction: {str(e)}\n{traceback.format_exc()}")
@@ -609,6 +621,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{display_angle:.1f}°",
                         (int(hip_left.x * frame.shape[1]), int(hip_left.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(display_angle)
             return display_angle
         except Exception as e:
             logger.error(f"Error tracking hip abduction left: {str(e)}\n{traceback.format_exc()}")
@@ -631,6 +644,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(knee.x * frame.shape[1]), int(knee.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking squat: {str(e)}\n{traceback.format_exc()}")
@@ -655,6 +669,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{abs_angle:.1f}°",
                         (int(nose.x * frame.shape[1]), int(nose.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(abs_angle)
             return abs_angle
         except Exception as e:
             logger.error(f"Error tracking neck rotation: {str(e)}\n{traceback.format_exc()}")
@@ -677,6 +692,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{deviation:.1f}°",
                         (int(ankle.x * frame.shape[1]), int(ankle.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(deviation)
             return deviation
         except Exception as e:
             logger.error(f"Error tracking ankle dorsiflexion: {str(e)}\n{traceback.format_exc()}")
@@ -698,6 +714,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(wrist.x * frame.shape[1]), int(wrist.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking wrist flexion: {str(e)}\n{traceback.format_exc()}")
@@ -722,6 +739,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{abs_angle:.1f}°",
                         (int(shoulder_mid_x * frame.shape[1]), int(shoulder_mid_y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(abs_angle)
             return abs_angle
         except Exception as e:
             logger.error(f"Error tracking trunk rotation: {str(e)}\n{traceback.format_exc()}")
@@ -744,6 +762,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{deviation:.1f}°",
                         (int(ankle.x * frame.shape[1]), int(ankle.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(deviation)
             return deviation
         except Exception as e:
             logger.error(f"Error tracking calf raise: {str(e)}\n{traceback.format_exc()}")
@@ -765,6 +784,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(knee.x * frame.shape[1]), int(knee.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking leg extension: {str(e)}\n{traceback.format_exc()}")
@@ -786,6 +806,7 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(shoulder.x * frame.shape[1]), int(shoulder.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking shoulder abduction: {str(e)}\n{traceback.format_exc()}")
@@ -810,10 +831,33 @@ class RehabMotionTracker:
             cv2.putText(frame, f"{angle:.1f}°",
                         (int(hip.x * frame.shape[1]), int(hip.y * frame.shape[0])),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
             return angle
         except Exception as e:
             logger.error(f"Error tracking hip extension: {str(e)}\n{traceback.format_exc()}")
             return None
+
+    def update_status(self, angle=None):
+        """Update the latest_status dictionary with current tracker state."""
+        global latest_status
+        try:
+            with tracker_lock:
+                latest_status.update({
+                    "exercise": self.current_exercise,
+                    "rep_count": self.rep_counter,
+                    "current_angle": float(self.angle_label.cget("text")[:-1]) if angle is None else angle,
+                    "max_rom": self.session_max_rom,
+                    "historical_max_rom": self.historical_max_rom,
+                    "rep_goal": int(self.rep_goal_var.get()),
+                    "pain_level": self.pain_level,
+                    "is_recording": self.is_recording,
+                    "is_camera_on": True,
+                    "rep_speed": self.current_rep_speed,
+                    "feedback": self.feedback_label.cget("text")
+                })
+                logger.debug("Status updated")
+        except Exception as e:
+            logger.error(f"Error updating status: {str(e)}\n{traceback.format_exc()}")
 
 # Mock classes for UI compatibility
 class MockLabel:
@@ -867,9 +911,8 @@ class MockAxes:
         pass
 
 def run_tracker():
-    global tracker, current_frame, running
+    global tracker, running
     logger.info("Starting tracker thread")
-    
     try:
         with tracker_lock:
             tracker = RehabMotionTracker()
@@ -877,10 +920,8 @@ def run_tracker():
             tracker.initialized = True
             running = True
             logger.info("Tracker successfully initialized")
-            
         while running:
             time.sleep(0.1)
-            
     except Exception as e:
         logger.error(f"Tracker error: {str(e)}\n{traceback.format_exc()}")
         with tracker_lock:
@@ -889,55 +930,48 @@ def run_tracker():
 
 @app.route('/video_feed')
 def video_feed():
-    response = Response(
-        generate_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame',
-        headers={
-            'Cache-Control': 'no-store, no-cache, must-revalidate',
-            'Pragma': 'no-cache',
-            'Connection': 'keep-alive',
-            'Transfer-Encoding': 'chunked'
-        }
-    )
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return response
+    try:
+        def generate_frames():
+            test_pattern = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(test_pattern, "TEST PATTERN", (50, 240), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            while True:
+                try:
+                    with frame_lock:
+                        frame = current_frame if current_frame is not None else test_pattern
+                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    cv2.putText(frame, timestamp, (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    ret, buffer = cv2.imencode('.jpg', frame, [
+                        int(cv2.IMWRITE_JPEG_QUALITY), 60,  # Reduced quality
+                        int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
+                    ])
+                    if not ret:
+                        logger.error("Frame encoding failed")
+                        continue
+                    yield (b'--frame\r\n'
+                          b'Content-Type: image/jpeg\r\n\r\n' + 
+                          buffer.tobytes() + b'\r\n')
+                    time.sleep(0.1)  # ~10 FPS
+                except Exception as e:
+                    logger.error(f"Error in frame generation: {str(e)}\n{traceback.format_exc()}")
+                    time.sleep(1)
+        return Response(
+            generate_frames(),
+            mimetype='multipart/x-mixed-replace; boundary=frame',
+            headers={
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Connection': 'keep-alive',
+                'Transfer-Encoding': 'chunked',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Video feed error: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": f"Video feed error: {str(e)}"}), 500
 
-def generate_frames():
-    test_pattern = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(test_pattern, "TEST PATTERN", (50, 240), 
-               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-    
-    while True:
-        try:
-            # Use test pattern if no camera frame available
-            frame = current_frame if current_frame is not None else test_pattern
-            
-            # Add timestamp for debugging
-            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            cv2.putText(frame, timestamp, (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Convert to JPEG with quality settings
-            ret, buffer = cv2.imencode('.jpg', frame, [
-                int(cv2.IMWRITE_JPEG_QUALITY), 80,
-                int(cv2.IMWRITE_JPEG_PROGRESSIVE), 1
-            ])
-            
-            if not ret:
-                print("Frame encoding failed")
-                continue
-                
-            yield (b'--frame\r\n'
-                  b'Content-Type: image/jpeg\r\n\r\n' + 
-                  buffer.tobytes() + b'\r\n')
-            
-            time.sleep(0.033)  # ~30fps
-            
-        except Exception as e:
-            print(f"Error in frame generation: {str(e)}")
-            time.sleep(1)
-            
 @app.route('/upload_frame', methods=['POST'])
 def upload_frame():
     global tracker, current_frame
@@ -951,7 +985,6 @@ def upload_frame():
             logger.error("No frame in request")
             return jsonify({"status": "error", "message": "No frame provided"}), 400
         file = request.files['frame']
-        logger.debug(f"Frame file received, size: {file.content_length} bytes")
         nparr = np.frombuffer(file.read(), np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
@@ -959,14 +992,14 @@ def upload_frame():
             return jsonify({"status": "error", "message": "Invalid frame"}), 400
         logger.info(f"Frame decoded, shape: {frame.shape}")
         
-        # Process frame
-        frame = cv2.flip(frame, 1)
+        # Resize frame to reduce processing load
+        frame = cv2.resize(frame, (320, 240))
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = tracker.pose.process(rgb_frame)
         logger.debug(f"Pose processed, landmarks detected: {results.pose_landmarks is not None}")
         
+        angle = None
         if results.pose_landmarks:
-            logger.debug("Drawing landmarks on frame")
             tracker.mp_drawing.draw_landmarks(
                 frame,
                 results.pose_landmarks,
@@ -1009,7 +1042,7 @@ def upload_frame():
             if tracker.is_recording:
                 tracker.recorded_landmarks.append(results.pose_landmarks)
         
-        with tracker_lock:
+        with frame_lock:
             current_frame = frame
             logger.debug("Frame stored in current_frame")
         
@@ -1159,6 +1192,7 @@ def set_rep_goal():
                 rep_goal = request.json.get('rep_goal')
                 if rep_goal is not None and rep_goal > 0:
                     tracker.rep_goal_var.set(str(rep_goal))
+                    tracker.update_status()
                     return jsonify({"status": "success"})
                 logger.error(f"Invalid rep goal: {rep_goal}")
                 return jsonify({"status": "error", "message": "Invalid rep goal"}), 400
@@ -1175,24 +1209,13 @@ def get_status():
             if tracker and tracker.initialized:
                 return jsonify({
                     "status": "success",
-                    "data": {
-                        "exercise": tracker.current_exercise,
-                        "rep_count": tracker.rep_counter,
-                        "current_angle": 0.0, 
-                        "max_rom": 0.0,      
-                        "historical_max_rom": tracker.historical_max_rom,
-                        "rep_goal": int(tracker.rep_goal_var.get()),
-                        "pain_level": tracker.pain_level,
-                        "is_recording": tracker.is_recording,
-                        "is_camera_on": True,
-                        "rep_speed": tracker.current_rep_speed,
-                        "feedback": tracker.feedback_label.cget("text")
-                    }
+                    "data": latest_status
                 }), 200
             return jsonify({"status": "error", "message": "Tracker not ready"}), 503
     except Exception as e:
+        logger.error(f"Status error: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 500
-    
+
 @app.route('/get_exercises', methods=['GET'])
 def get_exercises():
     logger.info(f"Received get_exercises request from {request.remote_addr}")
@@ -1209,7 +1232,6 @@ def get_exercises():
                     "tracker_status": "initialized"
                 })
             elif tracker is None:
-                # Start tracker if not running
                 start_tracker()
         
         time.sleep(0.5)
@@ -1219,7 +1241,7 @@ def get_exercises():
         "message": "Tracker initialization timed out",
         "tracker_status": "uninitialized"
     }), 500
-    
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1227,7 +1249,7 @@ def health_check():
         "server": "Motion Tracker",
         "time": datetime.now().isoformat()
     })
-    
+
 @app.route('/get_exercise_data', methods=['GET'])
 def get_exercise_data():
     logger.info(f"Received get_exercise_data request from {request.remote_addr}")
