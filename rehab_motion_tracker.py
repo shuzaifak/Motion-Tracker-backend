@@ -952,27 +952,28 @@ def run_tracker():
 def video_feed():
     try:
         def generate_frames():
-            test_pattern = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(test_pattern, "TEST PATTERN", (50, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            test_pattern = np.zeros((240, 320, 3), dtype=np.uint8)  # Reduced size
+            cv2.putText(test_pattern, "TEST PATTERN", (20, 120),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             while True:
                 try:
                     with frame_lock:
                         frame = current_frame if current_frame is not None else test_pattern
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                    cv2.putText(frame, timestamp, (10, 30),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(frame, timestamp, (10, 20),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                     ret, buffer = cv2.imencode('.jpg', frame, [
-                        int(cv2.IMWRITE_JPEG_QUALITY), 40,  # Lowered quality
+                        int(cv2.IMWRITE_JPEG_QUALITY), 30,  # Reduced quality
                         int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
                     ])
                     if not ret:
                         logger.error("Frame encoding failed")
                         continue
                     yield (b'--frame\r\n'
-                          b'Content-Type: image/jpeg\r\n\r\n' +
-                          buffer.tobytes() + b'\r\n')
-                    time.sleep(0.1)
+                          b'Content-Type: image/jpeg\r\n'
+                          b'Content-Length: ' + str(len(buffer)).encode() + b'\r\n\r\n'
+                          + buffer.tobytes() + b'\r\n')
+                    time.sleep(0.2)  # Increased to reduce CPU load
                 except Exception as e:
                     logger.error(f"Error in frame generation: {str(e)}\n{traceback.format_exc()}")
                     time.sleep(1)
@@ -980,10 +981,9 @@ def video_feed():
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame',
             headers={
-                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, private',
                 'Pragma': 'no-cache',
                 'Connection': 'keep-alive',
-                'Transfer-Encoding': 'chunked',
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Headers': 'Content-Type'
             }
