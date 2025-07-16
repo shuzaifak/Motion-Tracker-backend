@@ -77,8 +77,8 @@ class RehabMotionTracker:
             self.mp_pose = mp.solutions.pose
             self.pose = self.mp_pose.Pose(
                 model_complexity=1,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
+                min_detection_confidence=0.3,  # Lowered for better detection
+                min_tracking_confidence=0.3   # Lowered for better detection
             )
             logger.debug("MediaPipe Pose initialized")
 
@@ -963,7 +963,7 @@ def video_feed():
                     cv2.putText(frame, timestamp, (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                     ret, buffer = cv2.imencode('.jpg', frame, [
-                        int(cv2.IMWRITE_JPEG_QUALITY), 50,
+                        int(cv2.IMWRITE_JPEG_QUALITY), 40,  # Lowered quality
                         int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
                     ])
                     if not ret:
@@ -1004,12 +1004,24 @@ def upload_frame():
             logger.error("No frame in request")
             return jsonify({"status": "error", "message": "No frame provided"}), 400
         file = request.files['frame']
-        nparr = np.frombuffer(file.read(), np.uint8)
+        frame_data = file.read()
+        frame_size = len(frame_data)
+        if frame_size > 1_000_000:  # Reject frames larger than 1MB
+            logger.error(f"Frame too large: {frame_size} bytes")
+            return jsonify({"status": "error", "message": "Frame size exceeds 1MB limit"}), 400
+        nparr = np.frombuffer(frame_data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
             logger.error("Invalid frame received")
             return jsonify({"status": "error", "message": "Invalid frame"}), 400
         logger.info(f"Frame decoded, shape: {frame.shape}")
+
+        # Analyze frame content for debugging
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        mean_intensity = np.mean(gray)
+        logger.debug(f"Frame mean intensity: {mean_intensity:.2f}")
+        if mean_intensity < 10:
+            logger.warning("Frame is too dark, may affect pose detection")
 
         # Resize frame to reduce processing load
         frame = cv2.resize(frame, (240, 180))
@@ -1060,6 +1072,8 @@ def upload_frame():
                             logger.warning(f"Invalid rep goal: {ve}")
             if tracker.is_recording:
                 tracker.recorded_landmarks.append(results.pose_landmarks)
+        else:
+            logger.warning("No landmarks detected in frame")
 
         with frame_lock:
             global current_frame
