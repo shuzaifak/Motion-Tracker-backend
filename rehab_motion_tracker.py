@@ -19,11 +19,13 @@ CORS(app, resources={
         "allow_headers": ["Content-Type"]
     }
 })
+
+# Global variables
 tracker = None
 tracker_thread = None
 tracker_lock = threading.Lock()
 current_frame = None
-frame_lock = threading.Lock()  # Separate lock for frame access
+frame_lock = threading.Lock()
 running = False
 latest_status = {
     "exercise": "Arm Raise",
@@ -57,7 +59,7 @@ class RehabMotionTracker:
             self.mp_drawing = mp.solutions.drawing_utils
             self.mp_pose = mp.solutions.pose
             self.pose = self.mp_pose.Pose(
-                model_complexity=1,  # Reduced complexity for faster processing
+                model_complexity=1,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5
             )
@@ -72,7 +74,6 @@ class RehabMotionTracker:
             self.historical_max_rom = 0
 
             # Runtime
-            self.cap = None  # Not used; camera managed by Flutter
             self.is_recording = False
             self.start_time = 0
             self.exercise_data = []
@@ -84,12 +85,11 @@ class RehabMotionTracker:
             self.angle_history = []
             self.max_history_points = 100
             self.rep_timestamps = []
-            self.last_rep_time = 0
             self.current_rep_speed = "Normal"
             self.session_max_rom = 0
             self.initialized = False
 
-            # UI elements (mocked for compatibility)
+            # UI mocks
             self.angle_label = MockLabel("0°")
             self.rom_label = MockLabel("0°")
             self.prev_rom_label = MockLabel("0°")
@@ -565,7 +565,17 @@ class RehabMotionTracker:
             elif angle > 150 and self.last_position == "up":
                 self.last_position = "down"
             cv2.putText(frame, f"{angle:.1f}°",
-                        ( stagelandmarkmark[self.mp_pose.PoseLandmark.RIGHT_HIP]
+                        (int(elbow.x * frame.shape[1]), int(elbow.y * frame.shape[0])),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            self.update_status(angle)
+            return angle
+        except Exception as e:
+            logger.error(f"Error tracking elbow flexion left: {str(e)}\n{traceback.format_exc()}")
+            return None
+
+    def track_hip_abduction(self, landmarks, frame):
+        try:
+            hip_right = landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP]
             hip_left = landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP]
             knee = landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_KNEE]
             hip_mid_x = (hip_left.x + hip_right.x) / 2
@@ -838,7 +848,6 @@ class RehabMotionTracker:
             return None
 
     def update_status(self, angle=None):
-        """Update the latest_status dictionary with current tracker state."""
         global latest_status
         try:
             with tracker_lock:
@@ -859,7 +868,7 @@ class RehabMotionTracker:
         except Exception as e:
             logger.error(f"Error updating status: {str(e)}\n{traceback.format_exc()}")
 
-# Mock classes for UI compatibility
+# Mock classes
 class MockLabel:
     def __init__(self, text):
         self._text = text
@@ -933,26 +942,26 @@ def video_feed():
     try:
         def generate_frames():
             test_pattern = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(test_pattern, "TEST PATTERN", (50, 240), 
+            cv2.putText(test_pattern, "TEST PATTERN", (50, 240),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             while True:
                 try:
                     with frame_lock:
                         frame = current_frame if current_frame is not None else test_pattern
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                    cv2.putText(frame, timestamp, (10, 30), 
+                    cv2.putText(frame, timestamp, (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                     ret, buffer = cv2.imencode('.jpg', frame, [
-                        int(cv2.IMWRITE_JPEG_QUALITY), 60,  # Reduced quality
+                        int(cv2.IMWRITE_JPEG_QUALITY), 60,
                         int(cv2.IMWRITE_JPEG_OPTIMIZE), 1
                     ])
                     if not ret:
                         logger.error("Frame encoding failed")
                         continue
                     yield (b'--frame\r\n'
-                          b'Content-Type: image/jpeg\r\n\r\n' + 
+                          b'Content-Type: image/jpeg\r\n\r\n' +
                           buffer.tobytes() + b'\r\n')
-                    time.sleep(0.1)  # ~10 FPS
+                    time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"Error in frame generation: {str(e)}\n{traceback.format_exc()}")
                     time.sleep(1)
@@ -991,13 +1000,13 @@ def upload_frame():
             logger.error("Invalid frame received")
             return jsonify({"status": "error", "message": "Invalid frame"}), 400
         logger.info(f"Frame decoded, shape: {frame.shape}")
-        
+
         # Resize frame to reduce processing load
         frame = cv2.resize(frame, (320, 240))
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = tracker.pose.process(rgb_frame)
         logger.debug(f"Pose processed, landmarks detected: {results.pose_landmarks is not None}")
-        
+
         angle = None
         if results.pose_landmarks:
             tracker.mp_drawing.draw_landmarks(
@@ -1041,11 +1050,11 @@ def upload_frame():
                             logger.warning(f"Invalid rep goal: {ve}")
             if tracker.is_recording:
                 tracker.recorded_landmarks.append(results.pose_landmarks)
-        
+
         with frame_lock:
             current_frame = frame
             logger.debug("Frame stored in current_frame")
-        
+
         if results.pose_landmarks:
             landmarks = [
                 {"x": lm.x, "y": lm.y, "visibility": lm.visibility}
@@ -1219,7 +1228,7 @@ def get_status():
 @app.route('/get_exercises', methods=['GET'])
 def get_exercises():
     logger.info(f"Received get_exercises request from {request.remote_addr}")
-    max_wait = 10  # seconds
+    max_wait = 10
     start_time = time.time()
     
     while time.time() - start_time < max_wait:
@@ -1227,7 +1236,7 @@ def get_exercises():
             if tracker is not None and tracker.initialized:
                 exercises = list(tracker.exercises.keys())
                 return jsonify({
-                    "status": "success", 
+                    "status": "success",
                     "exercises": exercises,
                     "tracker_status": "initialized"
                 })
